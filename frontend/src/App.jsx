@@ -10,6 +10,9 @@ function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [toast, setToast] = useState(null);
+  const [selectedRegion, setSelectedRegion] = useState('');
+  const [currentRegion, setCurrentRegion] = useState(null);
+  const [currentEmail, setCurrentEmail] = useState(null);
 
   useEffect(() => {
     fetchStatus();
@@ -26,12 +29,18 @@ function App() {
     try {
       const res = await axios.get(`${API_BASE}/status`);
       if (res.data.rows) setRows(res.data.rows);
+      if (res.data.region) setCurrentRegion(res.data.region);
+      if (res.data.email) setCurrentEmail(res.data.email);
     } catch (err) {
       console.error(err);
     }
   };
 
   const handleUpload = async (e) => {
+    if (!selectedRegion) {
+      showToast('Please select a region before uploading', 'error');
+      return;
+    }
     const selectedFile = e.target.files[0];
     if (!selectedFile) return;
     setFile(selectedFile);
@@ -39,10 +48,13 @@ function App() {
     
     const formData = new FormData();
     formData.append('file', selectedFile);
+    formData.append('region', selectedRegion);
 
     try {
       const res = await axios.post(`${API_BASE}/upload`, formData);
       setRows(res.data.rows);
+      if (res.data.region) setCurrentRegion(res.data.region);
+      if (res.data.email) setCurrentEmail(res.data.email);
       showToast('CSV uploaded and validated successfully!');
     } catch (err) {
       showToast('Upload failed', 'error');
@@ -78,6 +90,8 @@ function App() {
       await axios.post(`${API_BASE}/reset`);
       setRows([]);
       setFile(null);
+      setCurrentRegion(null);
+      setCurrentEmail(null);
       showToast('System reset successfully', 'success');
     } catch (err) {
       showToast('Failed to reset system', 'error');
@@ -114,11 +128,35 @@ function App() {
               <Send className="text-blue-600" /> Ship Outreach System
             </h1>
             <p className="text-slate-500 mt-1 font-medium">Automated Stage 1 Email Delivery & Tracking</p>
+            {currentRegion && (
+              <p className="text-blue-600 mt-1 font-semibold text-sm bg-blue-50 inline-block px-3 py-1 rounded-full border border-blue-100">
+                Active Region: {currentRegion.toUpperCase()} {currentEmail ? `(${currentEmail})` : ''}
+              </p>
+            )}
           </div>
           
           <div className="flex gap-4">
+            <select
+              value={selectedRegion}
+              onChange={(e) => setSelectedRegion(e.target.value)}
+              disabled={isUploading || isSending || (rows.length > 0)}
+              className="bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl outline-none focus:border-blue-500 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <option value="" disabled>Select Region</option>
+              <option value="asia">Asia</option>
+              <option value="europe">Europe</option>
+              <option value="singapore">Singapore</option>
+              <option value="africa">Africa</option>
+            </select>
+            
             <button 
-              onClick={() => document.getElementById('file-upload').click()}
+              onClick={() => {
+                if (!selectedRegion) {
+                  showToast('Please select a region before uploading', 'error');
+                } else {
+                  document.getElementById('file-upload').click();
+                }
+              }}
               disabled={isUploading || isSending}
               title="Upload your ship_emails.csv file"
               className="bg-white hover:bg-slate-50 text-slate-700 px-5 py-2.5 rounded-xl border border-slate-200 flex items-center gap-2 transition-all shadow-sm font-medium"

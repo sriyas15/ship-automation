@@ -1,30 +1,14 @@
 const { google } = require('googleapis');
-const { getOrCreateLabel, applyLabelToMessage, checkHistory } = require('./gmailService');
+const { getOrCreateLabel, applyLabelToMessage, checkHistory, initGmailService } = require('./gmailService');
 const { processCsv, writeCsv } = require('./csvHandler');
-require('dotenv').config();
 
-let oauth2Client;
-let gmail;
-
-function initPoller() {
-  if (!process.env.GMAIL_CLIENT_ID || !process.env.GMAIL_CLIENT_SECRET || !process.env.GMAIL_REFRESH_TOKEN) {
-    return false;
-  }
-  oauth2Client = new google.auth.OAuth2(
-    process.env.GMAIL_CLIENT_ID,
-    process.env.GMAIL_CLIENT_SECRET,
-    process.env.GMAIL_REDIRECT_URI
-  );
-  oauth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
-  gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-  return true;
-}
-
-async function checkBounces(csvFilePath, rows) {
-  if (!initPoller()) {
-    console.log("Cannot poll bounces: Missing Gmail OAuth credentials.");
+async function checkBounces(csvFilePath, rows, region = 'default') {
+  const clientData = initGmailService(region);
+  if (!clientData || !clientData.gmail) {
+    console.log(`Cannot poll bounces: Missing Gmail OAuth credentials for region ${region}.`);
     return;
   }
+  const gmail = clientData.gmail;
 
   try {
     // Broad search to catch all bounces, but ONLY in the inbox
@@ -36,11 +20,11 @@ async function checkBounces(csvFilePath, rows) {
 
     const messages = res.data.messages || [];
     if (messages.length === 0) {
-      console.log("No new bounce messages found.");
+      console.log(`No new bounce messages found for region ${region}.`);
       return;
     }
 
-    const bouncedLabelId = await getOrCreateLabel('Ship-Bounced');
+    const bouncedLabelId = await getOrCreateLabel('Ship-Bounced', region);
     let csvUpdated = false;
 
     for (const msg of messages) {
@@ -85,11 +69,13 @@ async function checkBounces(csvFilePath, rows) {
           
           if (matchesShipCode || matchesEmail) {
             row.status = 'bounced';
-            row.already_present = await checkHistory(row);
+            row.already_present = await checkHistory(row, region);
             csvUpdated = true;
             
             // Apply label to the bounce message itself so we know it's processed
-            await applyLabelToMessage(msg.id, bouncedLabelId);
+            if (bouncedLabelId) {
+                await applyLabelToMessage(msg.id, bouncedLabelId, region);
+            }
             
             // Optionally, remove INBOX label so it archives it
             await gmail.users.messages.modify({
@@ -97,7 +83,7 @@ async function checkBounces(csvFilePath, rows) {
               id: msg.id,
               requestBody: { removeLabelIds: ['INBOX'] }
             });
-            console.log(`Marked ${row.email} (${row.ship_code}) as bounced.`);
+            console.log(`Marked ${row.email} (${row.ship_code}) as bounced in region ${region}.`);
             
             // Stop checking other rows for this single bounce message
             break;
@@ -108,11 +94,11 @@ async function checkBounces(csvFilePath, rows) {
 
     if (csvUpdated) {
       await writeCsv(csvFilePath, rows);
-      console.log("CSV updated with new bounces.");
+      console.log(`CSV updated with new bounces for region ${region}.`);
     }
     
   } catch (err) {
-    console.error("Error polling bounces:", err.message);
+    console.error(`Error polling bounces for region ${region}:`, err.message);
   }
 }
 

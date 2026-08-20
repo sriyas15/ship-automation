@@ -21,17 +21,18 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 
 const upload = multer({ dest: UPLOADS_DIR });
 let currentCsvPath = null;
+let currentRegion = null;
 let activeRows = [];
 let isSending = false;
 
 // Initialize Gmail Service early
-initGmailService();
+initGmailService('default');
 
 // Cron job to poll bounces every 1 minute
 cron.schedule('* * * * *', async () => {
-  if (currentCsvPath && activeRows.length > 0) {
-    console.log('Polling for bounces...');
-    await checkBounces(currentCsvPath, activeRows);
+  if (currentCsvPath && activeRows.length > 0 && currentRegion) {
+    console.log(`Polling for bounces for region ${currentRegion}...`);
+    await checkBounces(currentCsvPath, activeRows, currentRegion);
   }
 });
 
@@ -39,7 +40,13 @@ cron.schedule('* * * * *', async () => {
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   
+  const region = req.body.region || 'default';
+  currentRegion = region;
   currentCsvPath = req.file.path;
+  
+  // Initialize region client if possible
+  initGmailService(currentRegion);
+  
   try {
     const rawRows = await processCsv(currentCsvPath);
     
@@ -57,11 +64,16 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     activeRows = Object.values(grouped);
 
     for (let row of activeRows) {
-      row.already_present = await checkHistory(row);
-      row.last_sent_time = await getLastSentTime(row) || 'N/A';
+      row.already_present = await checkHistory(row, currentRegion);
+      row.last_sent_time = await getLastSentTime(row, currentRegion) || 'N/A';
     }
     await writeCsv(currentCsvPath, activeRows);
-    res.json({ message: 'File uploaded and validated', rows: activeRows });
+    
+    let email = null;
+    const client = initGmailService(currentRegion);
+    if (client) email = client.user;
+
+    res.json({ message: 'File uploaded and validated', rows: activeRows, region: currentRegion, email });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -69,7 +81,12 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
 // 2. Get Status
 app.get('/api/status', (req, res) => {
-  res.json({ rows: activeRows });
+  let email = null;
+  if (currentRegion) {
+    const client = initGmailService(currentRegion);
+    if (client) email = client.user;
+  }
+  res.json({ rows: activeRows, region: currentRegion, email });
 });
 
 // 3. Start Campaign
@@ -104,8 +121,8 @@ app.post('/api/start', async (req, res) => {
         
         for (const email of emails) {
           try {
-            await sendEmail(email, subject, text);
-            console.log(`✅ Sent to ${email}`);
+            await sendEmail(email, subject, text, currentRegion);
+            console.log(`✅ Sent to ${email} using region ${currentRegion}`);
             anySent = true;
             await new Promise(resolve => setTimeout(resolve, 2000));
           } catch (err) {
@@ -117,7 +134,7 @@ app.post('/api/start', async (req, res) => {
           row.status = 'sent';
           row.timestamp = new Date().toISOString();
           row.last_sent_time = row.timestamp;
-          row.already_present = await checkHistory(row);
+          row.already_present = await checkHistory(row, currentRegion);
         } else {
           row.status = 'failed';
           row.timestamp = new Date().toISOString();
@@ -142,6 +159,7 @@ app.get('/api/download', (req, res) => {
 // 5. Reset System
 app.post('/api/reset', (req, res) => {
   currentCsvPath = null;
+  currentRegion = null;
   activeRows = [];
   isSending = false;
   res.json({ message: 'System reset successfully' });

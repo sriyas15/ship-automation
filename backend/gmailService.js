@@ -2,29 +2,47 @@ const { google } = require('googleapis');
 const nodemailer = require('nodemailer');
 require('dotenv').config();
 
-let oauth2Client;
-let gmail;
+const regionClients = {};
 
-function initGmailService() {
-  if (!process.env.GMAIL_CLIENT_ID || !process.env.GMAIL_CLIENT_SECRET || !process.env.GMAIL_REFRESH_TOKEN) {
-    console.warn("⚠️ Gmail OAuth2 credentials not fully configured in .env yet.");
-    return false;
+function initGmailService(region = 'default') {
+  const prefix = region === 'default' ? 'GMAIL' : `${region.toUpperCase()}_GMAIL`;
+  
+  // We fallback to default client if specific region user/token is missing
+  const user = process.env[`${prefix}_USER`] || process.env.GMAIL_USER;
+  const refreshToken = process.env[`${prefix}_REFRESH_TOKEN`] || process.env.GMAIL_REFRESH_TOKEN;
+  
+  const clientId = process.env.GMAIL_CLIENT_ID;
+  const clientSecret = process.env.GMAIL_CLIENT_SECRET;
+  const redirectUri = process.env.GMAIL_REDIRECT_URI;
+
+  if (!clientId || !clientSecret || !refreshToken) {
+    console.warn(`⚠️ Gmail OAuth2 credentials not fully configured in .env yet for region: ${region}`);
+    return null;
   }
 
-  oauth2Client = new google.auth.OAuth2(
-    process.env.GMAIL_CLIENT_ID,
-    process.env.GMAIL_CLIENT_SECRET,
-    process.env.GMAIL_REDIRECT_URI
+  if (regionClients[region]) {
+    return regionClients[region];
+  }
+
+  const oauth2Client = new google.auth.OAuth2(
+    clientId,
+    clientSecret,
+    redirectUri
   );
   
-  oauth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
-  gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-  return true;
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  
+  regionClients[region] = { oauth2Client, gmail, user, refreshToken, clientId, clientSecret };
+  return regionClients[region];
 }
 
 // Function to get or create a label in Gmail
-async function getOrCreateLabel(labelName) {
-  if (!gmail) return null;
+async function getOrCreateLabel(labelName, region = 'default') {
+  const clientData = initGmailService(region);
+  if (!clientData || !clientData.gmail) return null;
+  
+  const gmail = clientData.gmail;
   const res = await gmail.users.labels.list({ userId: 'me' });
   const labels = res.data.labels;
   const existingLabel = labels.find(l => l.name === labelName);
@@ -46,8 +64,11 @@ async function getOrCreateLabel(labelName) {
 }
 
 // Function to apply a label to a message
-async function applyLabelToMessage(messageId, labelId) {
-  if (!gmail) return;
+async function applyLabelToMessage(messageId, labelId, region = 'default') {
+  const clientData = initGmailService(region);
+  if (!clientData || !clientData.gmail) return;
+  
+  const gmail = clientData.gmail;
   await gmail.users.messages.modify({
     userId: 'me',
     id: messageId,
@@ -58,10 +79,13 @@ async function applyLabelToMessage(messageId, labelId) {
 }
 
 // Send email using Nodemailer wrapped with OAuth2
-async function sendEmail(to, subject, text) {
-  if (!initGmailService()) {
-    throw new Error("Gmail API not configured.");
+async function sendEmail(to, subject, text, region = 'default') {
+  const clientData = initGmailService(region);
+  if (!clientData) {
+    throw new Error(`Gmail API not configured for region: ${region}`);
   }
+  
+  const { oauth2Client, user, refreshToken, clientId, clientSecret } = clientData;
   
   const accessToken = await new Promise((resolve, reject) => {
     oauth2Client.getAccessToken((err, token) => {
@@ -76,16 +100,16 @@ async function sendEmail(to, subject, text) {
     service: 'gmail',
     auth: {
       type: 'OAuth2',
-      user: process.env.GMAIL_USER, // The email address
+      user: user, // The email address
       accessToken,
-      clientId: process.env.GMAIL_CLIENT_ID,
-      clientSecret: process.env.GMAIL_CLIENT_SECRET,
-      refreshToken: process.env.GMAIL_REFRESH_TOKEN
+      clientId: clientId,
+      clientSecret: clientSecret,
+      refreshToken: refreshToken
     }
   });
 
   const info = await transporter.sendMail({
-    from: process.env.GMAIL_USER,
+    from: user,
     to,
     subject,
     text
@@ -94,17 +118,11 @@ async function sendEmail(to, subject, text) {
   return info;
 }
 
-module.exports = {
-  initGmailService,
-  getOrCreateLabel,
-  applyLabelToMessage,
-  sendEmail,
-  checkHistory,
-  getLastSentTime
-};
+async function checkHistory(row, region = 'default') {
+  const clientData = initGmailService(region);
+  if (!clientData || !clientData.gmail) return 'N/A';
 
-async function checkHistory(row) {
-  if (!gmail) return 'N/A';
+  const gmail = clientData.gmail;
 
   const terms = [];
   if (row.ship_name) terms.push(`"${row.ship_name.replace(/"/g, '')}"`);
@@ -138,13 +156,16 @@ async function checkHistory(row) {
 
     return parts.join(' ');
   } catch (err) {
-    console.error('Error checking history:', err.message);
+    console.error(`Error checking history for region ${region}:`, err.message);
     return 'N/A';
   }
 }
 
-async function getLastSentTime(row) {
-  if (!gmail) return null;
+async function getLastSentTime(row, region = 'default') {
+  const clientData = initGmailService(region);
+  if (!clientData || !clientData.gmail) return null;
+
+  const gmail = clientData.gmail;
 
   const terms = [];
   if (row.ship_name) terms.push(`"${row.ship_name.replace(/"/g, '')}"`);
@@ -173,7 +194,16 @@ async function getLastSentTime(row) {
       }
     }
   } catch (err) {
-    console.error('Error fetching last sent time:', err.message);
+    console.error(`Error fetching last sent time for region ${region}:`, err.message);
   }
   return null;
 }
+
+module.exports = {
+  initGmailService,
+  getOrCreateLabel,
+  applyLabelToMessage,
+  sendEmail,
+  checkHistory,
+  getLastSentTime
+};
