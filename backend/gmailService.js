@@ -79,7 +79,7 @@ async function applyLabelToMessage(messageId, labelId, region = 'default') {
 }
 
 // Send email using Nodemailer wrapped with OAuth2
-async function sendEmail(to, subject, text, region = 'default') {
+async function sendEmail(to, subject, text, html = '', region = 'default') {
   const clientData = initGmailService(region);
   if (!clientData) {
     throw new Error(`Gmail API not configured for region: ${region}`);
@@ -112,7 +112,8 @@ async function sendEmail(to, subject, text, region = 'default') {
     from: user,
     to,
     subject,
-    text
+    text,
+    html
   });
   
   return info;

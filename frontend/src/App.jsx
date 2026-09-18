@@ -31,6 +31,7 @@ function App() {
       if (res.data.rows) setRows(res.data.rows);
       if (res.data.region) setCurrentRegion(res.data.region);
       if (res.data.email) setCurrentEmail(res.data.email);
+      if (res.data.isSending !== undefined) setIsSending(res.data.isSending);
     } catch (err) {
       console.error(err);
     }
@@ -71,8 +72,7 @@ function App() {
       showToast('Campaign started successfully! Emails are now being sent.');
     } catch (err) {
       showToast('Failed to start campaign', 'error');
-    } finally {
-      setIsSending(false);
+      setIsSending(false); // Only reset on immediate failure
     }
   };
 
@@ -162,7 +162,7 @@ function App() {
               className="bg-white hover:bg-slate-50 text-slate-700 px-5 py-2.5 rounded-xl border border-slate-200 flex items-center gap-2 transition-all shadow-sm font-medium"
             >
               {isUploading ? <RefreshCw className="animate-spin w-5 h-5 text-blue-500" /> : <Upload className="w-5 h-5 text-blue-500" />}
-              {isUploading ? 'Uploading...' : 'Upload CSV'}
+              {isUploading ? 'Validating CSV...' : 'Upload CSV'}
             </button>
             <input id="file-upload" type="file" accept=".csv" className="hidden" onChange={handleUpload} />
 
@@ -178,7 +178,7 @@ function App() {
             
             <button 
               onClick={handleStartCampaign}
-              disabled={isSending || stats.total === 0 || stats.pending === 0}
+              disabled={isUploading || isSending || stats.total === 0 || stats.pending === 0}
               title="Start sending emails to all pending ships"
               className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded-xl font-semibold flex items-center gap-2 transition-all shadow-md shadow-blue-500/20"
             >
@@ -238,6 +238,11 @@ function App() {
                       <td className="px-6 py-4 text-slate-600 font-mono text-xs">{row.last_sent_time && row.last_sent_time !== 'N/A' ? new Date(row.last_sent_time).toLocaleString() : 'N/A'}</td>
                       <td className="px-6 py-4">
                         <StatusBadge status={row.status || 'pending'} />
+                        {row.status === 'spam_risk' && row.error_message && (
+                          <div className="text-[10px] text-red-600 font-semibold mt-1 max-w-[150px] leading-tight">
+                            ⚠️ {row.error_message}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -273,7 +278,8 @@ function StatusBadge({ status }) {
     invalid: 'bg-orange-50 text-orange-700 border-orange-200',
     failed: 'bg-red-50 text-red-900 border-red-300 font-bold',
     skipped_24h: 'bg-slate-100 text-slate-700 border-slate-300',
-    delivered: 'bg-emerald-50 text-emerald-700 border-emerald-200'
+    delivered: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    spam_risk: 'bg-red-100 text-red-800 border-red-300 font-extrabold'
   };
   
   const style = styles[status] || styles.pending;
